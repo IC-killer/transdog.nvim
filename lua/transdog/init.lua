@@ -1,8 +1,8 @@
 local M = {}
 
 function M.setup(opts)
-	-- 初始化配置
 	require("transdog.config").setup(opts)
+	M._setup_called = true -- 标记已调用
 end
 
 function M.translate_word()
