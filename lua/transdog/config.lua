@@ -1,26 +1,25 @@
 local M = {}
 
--- 所有可配置项的默认值
 M.defaults = {
-	sdcv_cmd = "sdcv", -- sdcv 可执行文件路径
-	ollama_model = "translategemma:4b",
+	sdcv_cmd = "sdcv",
 	ollama_cmd = "ollama",
+	ollama_model = "translategemma:4b",
+	stream = true,
 	float = {
 		border = "rounded",
-		max_width = 80,
-		max_height = 20,
+		max_width = 120,
+		max_height = 40,
+		wrap_width = 100,
 	},
 	keymaps = {
 		translate_word = "<leader>tt",
-		translate_ollama = "<leader>tt", -- visual 模式
+		translate_ollama = "<leader>tt",
 	},
 }
 
--- 运行时实际生效的配置（由 setup 填充）
 M.options = {}
 
 function M.setup(opts)
-	-- 用用户传入的 opts 覆盖默认值，深合并
 	M.options = vim.tbl_deep_extend("force", M.defaults, opts or {})
 end
 
