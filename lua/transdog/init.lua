@@ -47,6 +47,9 @@ function M.translate_with_ollama()
 				vim.notify(err, vim.log.levels.ERROR)
 			else
 				ui.status_done()
+				if vim.api.nvim_win_is_valid(win) then
+					vim.api.nvim_set_current_win(win)
+				end
 			end
 		end)
 	else
