@@ -3,6 +3,7 @@
 一个专注于**离线翻译**的 Neovim 插件，基于 [sdcv](https://github.com/Dushistov/sdcv) 词典查词和 [Ollama](https://ollama.com) 本地 AI 翻译，无需网络，无需 API Key。
 
 ![screenshot](./assets/screenshot.png)
+![screenshot](./assets/screenshot1.png)
 
 ---
 
