@@ -1,13 +1,19 @@
 local M = {}
 
--- 功能1：sdcv 查词
+function M.setup(opts)
+	-- 初始化配置
+	require("transdog.config").setup(opts)
+end
+
 function M.translate_word()
+	local cfg = require("transdog.config").options
 	local word = vim.fn.expand("<cword>")
 	if word == "" then
 		return
 	end
 
-	local handle = io.popen("sdcv -n " .. word)
+	-- 使用配置中的命令，而不是硬编码 "sdcv"
+	local handle = io.popen(cfg.sdcv_cmd .. " -n " .. word)
 	local result = handle:read("*a")
 	handle:close()
 
@@ -24,8 +30,8 @@ function M.translate_word()
 	local buf = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
-	local width = math.min(80, vim.o.columns - 10)
-	local height = math.min(20, #lines)
+	local width = math.min(cfg.float.max_width, vim.o.columns - 10)
+	local height = math.min(cfg.float.max_height, #lines)
 
 	vim.api.nvim_open_win(buf, true, {
 		relative = "cursor",
@@ -34,14 +40,15 @@ function M.translate_word()
 		width = width,
 		height = height,
 		style = "minimal",
-		border = "rounded",
+		border = cfg.float.border,
 	})
 
 	vim.api.nvim_buf_set_keymap(buf, "n", "q", ":q<CR>", { noremap = true, silent = true })
 end
 
--- 功能2：Ollama AI 翻译
 function M.translate_with_ollama()
+	local cfg = require("transdog.config").options
+
 	vim.cmd('normal! "vy')
 	local text = vim.fn.getreg("v")
 	if text == "" then
@@ -50,10 +57,12 @@ function M.translate_with_ollama()
 
 	vim.notify("AI 正在翻译...", vim.log.levels.INFO)
 
-	local prompt = "Translate the following text to Chinese. Output ONLY the translation. No explanation. No thinking process. Text: "
+	local prompt = "Translate the following text to Chinese. Output ONLY the translation. "
+		.. "No explanation. No thinking process. Text: "
 		.. text
 
-	vim.system({ "ollama", "run", "translategemma:4b", prompt }, { text = true }, function(obj)
+	-- 使用配置中的命令和模型名
+	vim.system({ cfg.ollama_cmd, "run", cfg.ollama_model, prompt }, { text = true }, function(obj)
 		vim.schedule(function()
 			if obj.code ~= 0 then
 				vim.notify("Ollama 错误: " .. (obj.stderr or ""), vim.log.levels.ERROR)
@@ -70,8 +79,8 @@ function M.translate_with_ollama()
 			local out_lines = vim.split(clean_text, "\n")
 			vim.api.nvim_buf_set_lines(out_buf, 0, -1, false, out_lines)
 
-			local width = math.min(70, vim.o.columns - 10)
-			local height = math.min(15, #out_lines)
+			local width = math.min(cfg.float.max_width, vim.o.columns - 10)
+			local height = math.min(cfg.float.max_height, #out_lines)
 
 			vim.api.nvim_open_win(out_buf, true, {
 				relative = "editor",
@@ -79,7 +88,7 @@ function M.translate_with_ollama()
 				col = (vim.o.columns - width) / 2,
 				width = width,
 				height = height,
-				border = "rounded",
+				border = cfg.float.border,
 				title = " AI 离线翻译 ",
 			})
 
