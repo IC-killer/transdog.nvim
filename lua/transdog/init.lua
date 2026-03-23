@@ -2,6 +2,7 @@ local M = {}
 
 function M.setup(opts)
 	require("transdog.config").setup(opts)
+	require("transdog.commands").setup()
 	M._setup_called = true
 end
 
