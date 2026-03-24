@@ -1,6 +1,6 @@
 # transdog.nvim 🐕
 
-一个专注于**离线翻译**的 Neovim 插件，基于 [sdcv](https://github.com/Dushistov/sdcv) 词典查词和 [Ollama](https://ollama.com) 本地 AI 翻译，无需网络，无需 API Key。
+一个专注于**离线翻译**的 Neovim 插件，基于 [sdcv](https://github.com/Dushistov/sdcv) 词典查词和 [Ollama](https://ollama.com) 本地/局域网 AI 翻译，无需网络，无需 API Key。
 
 ![screenshot](./assets/screenshot.png)
 ![screenshot](./assets/screenshot1.png)
@@ -68,6 +68,8 @@ ollama pull translategemma:4b
     sdcv_cmd     = "sdcv",               -- sdcv 可执行文件路径
     ollama_cmd   = "ollama",             -- ollama 可执行文件路径
     ollama_model = "translategemma:4b",  -- 使用的 Ollama 模型
+    ollama_host  = nil,                  -- nil 表示用本地命令，设置后走 HTTP API
+                                         -- 例如 "http://192.168.1.100:11434"
     stream       = true,                 -- 是否使用流式输出
 
     float = {
