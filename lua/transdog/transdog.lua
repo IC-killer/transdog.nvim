@@ -64,7 +64,15 @@ function M.ollama(text, callback)
 			body,
 		}, {}, function(obj)
 			if obj.code ~= 0 then
-				callback(nil, "curl 错误: " .. (obj.stderr or "未知错误"))
+				callback(
+					nil,
+					string.format(
+						"curl 错误 (exit %d): %s | stdout: %s",
+						obj.code,
+						obj.stderr or "",
+						obj.stdout or ""
+					)
+				)
 				return
 			end
 			local ok, data = pcall(vim.json.decode, obj.stdout)
@@ -215,60 +223,63 @@ function M.ollama_stream(text, on_chunk, on_done)
 			stream = true,
 		})
 
-		vim.system(
-			{
-				"curl",
-				"-s",
-				"--no-buffer",
-				"--max-time",
-				"120",
-				"-X",
-				"POST",
-				get_url("/api/generate"),
-				"-H",
-				"Content-Type: application/json",
-				"-d",
-				body,
-			},
-			{
-				stdout = function(err, chunk)
-					if err or not chunk or chunk == "" then
-						return
-					end
+		vim.system({
+			"curl",
+			"-s",
+			"--no-buffer",
+			"--max-time",
+			"120",
+			"-X",
+			"POST",
+			get_url("/api/generate"),
+			"-H",
+			"Content-Type: application/json",
+			"-d",
+			body,
+		}, {
+			stdout = function(err, chunk)
+				if err or not chunk or chunk == "" then
+					return
+				end
 
-					raw_buf = raw_buf .. chunk
-					local safe_pos = utf8_safe_end(raw_buf)
-					if safe_pos <= 0 then
-						return
-					end
+				raw_buf = raw_buf .. chunk
+				local safe_pos = utf8_safe_end(raw_buf)
+				if safe_pos <= 0 then
+					return
+				end
 
-					local safe_text = raw_buf:sub(1, safe_pos)
-					raw_buf = raw_buf:sub(safe_pos + 1)
+				local safe_text = raw_buf:sub(1, safe_pos)
+				raw_buf = raw_buf:sub(safe_pos + 1)
 
-					-- 按行解析 JSON，每行格式: {"model":...,"response":"字","done":false}
-					for line in safe_text:gmatch("[^\n]+") do
-						line = line:gsub("^%s+", ""):gsub("%s+$", "")
-						if line ~= "" then
-							local ok, data = pcall(vim.json.decode, line)
-							if ok and data and data.response then
-								vim.schedule(function()
-									filter_and_emit(data.response)
-								end)
-							end
+				-- 按行解析 JSON，每行格式: {"model":...,"response":"字","done":false}
+				for line in safe_text:gmatch("[^\n]+") do
+					line = line:gsub("^%s+", ""):gsub("%s+$", "")
+					if line ~= "" then
+						local ok, data = pcall(vim.json.decode, line)
+						if ok and data and data.response then
+							vim.schedule(function()
+								filter_and_emit(data.response)
+							end)
 						end
 					end
-				end,
-			},
-			function(obj)
-				vim.schedule(function()
-					if obj.code ~= 0 then
-						flush_and_done("curl 错误: " .. (obj.stderr or "未知错误"))
-					else
-						flush_and_done(nil)
-					end
-				end)
-			end
-		)
+				end
+			end,
+		}, function(obj)
+			vim.schedule(function()
+				if obj.code ~= 0 then
+					flush_and_done(
+						string.format(
+							"curl 错误 (exit %d): %s | stdout: %s",
+							obj.code,
+							obj.stderr or "",
+							obj.stdout or ""
+						)
+					)
+				else
+					flush_and_done(nil)
+				end
+			end)
+		end)
 	else
 		-- 本地命令流式（原逻辑不变）
 		vim.system({ cfg.ollama_cmd, "run", cfg.ollama_model, make_prompt(text) }, {
