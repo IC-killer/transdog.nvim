@@ -4,6 +4,8 @@ M.defaults = {
 	sdcv_cmd = "sdcv",
 	ollama_cmd = "ollama",
 	ollama_model = "translategemma:4b",
+	ollama_host = nil, -- nil 表示用本地命令，设置后走 HTTP API
+	--   例如 "http://192.168.1.100:11434"
 	stream = true,
 	float = {
 		border = "rounded",

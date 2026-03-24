@@ -19,6 +19,21 @@ function M.sdcv(word)
 	return result, nil
 end
 
+local function use_http()
+	return require("transdog.config").options.ollama_host ~= nil
+end
+
+local function get_url(path)
+	local host = require("transdog.config").options.ollama_host
+	return host:gsub("/$", "") .. path
+end
+
+local function make_prompt(text)
+	return "Translate the following text to Chinese. Output ONLY the translation. "
+		.. "No explanation. No thinking process. Text: "
+		.. text
+end
+
 -- Ollama 非流式翻译（异步）
 function M.ollama(text, callback)
 	local cfg = require("transdog.config").options
@@ -27,20 +42,60 @@ function M.ollama(text, callback)
 		.. "No explanation. No thinking process. Text: "
 		.. text
 
-	-- 不用 text=true，直接拿原始字节，避免平台做任何编码转换
-	vim.system({ cfg.ollama_cmd, "run", cfg.ollama_model, prompt }, {}, function(obj)
-		if obj.code ~= 0 then
-			callback(nil, "Ollama 错误: " .. (obj.stderr or "未知错误"))
-			return
-		end
-		local clean = obj.stdout:gsub("<think>.-</think>", "")
-		clean = clean:gsub("^%s+", ""):gsub("%s+$", "")
-		if clean == "" then
-			callback(nil, "AI 未返回有效翻译结果")
-			return
-		end
-		callback(clean, nil)
-	end)
+	if use_http() then
+		-- HTTP API 非流式
+		local body = vim.json.encode({
+			model = cfg.ollama_model,
+			prompt = make_prompt(text),
+			stream = false,
+		})
+
+		vim.system({
+			"curl",
+			"-s",
+			"--max-time",
+			"60",
+			"-X",
+			"POST",
+			get_url("/api/generate"),
+			"-H",
+			"Content-Type: application/json",
+			"-d",
+			body,
+		}, {}, function(obj)
+			if obj.code ~= 0 then
+				callback(nil, "curl 错误: " .. (obj.stderr or "未知错误"))
+				return
+			end
+			local ok, data = pcall(vim.json.decode, obj.stdout)
+			if not ok or not data or not data.response then
+				callback(nil, "解析响应失败: " .. (obj.stdout or ""))
+				return
+			end
+			local clean = data.response:gsub("<think>.-</think>", "")
+			clean = clean:gsub("^%s+", ""):gsub("%s+$", "")
+			if clean == "" then
+				callback(nil, "AI 未返回有效翻译结果")
+				return
+			end
+			callback(clean, nil)
+		end)
+	else
+		-- 不用 text=true，直接拿原始字节，避免平台做任何编码转换
+		vim.system({ cfg.ollama_cmd, "run", cfg.ollama_model, prompt }, {}, function(obj)
+			if obj.code ~= 0 then
+				callback(nil, "Ollama 错误: " .. (obj.stderr or "未知错误"))
+				return
+			end
+			local clean = obj.stdout:gsub("<think>.-</think>", "")
+			clean = clean:gsub("^%s+", ""):gsub("%s+$", "")
+			if clean == "" then
+				callback(nil, "AI 未返回有效翻译结果")
+				return
+			end
+			callback(clean, nil)
+		end)
+	end
 end
 
 -- ── UTF-8 工具 ───────────────────────────────────────────────────────────────
@@ -103,19 +158,12 @@ end
 function M.ollama_stream(text, on_chunk, on_done)
 	local cfg = require("transdog.config").options
 
-	local prompt = "Translate the following text to Chinese. Output ONLY the translation. "
-		.. "No explanation. No thinking process. Text: "
-		.. text
-
-	-- raw_buf   : 字节层缓冲，用于拼接不完整的 UTF-8 字符
-	-- think_buf : 文本层缓冲，用于跨 chunk 过滤 <think> 块
 	local raw_buf = ""
 	local think_buf = ""
 	local in_think = false
 
 	local function filter_and_emit(safe_text)
 		think_buf = think_buf .. safe_text
-
 		while true do
 			if in_think then
 				local e = think_buf:find("</think>", 1, true)
@@ -123,14 +171,12 @@ function M.ollama_stream(text, on_chunk, on_done)
 					think_buf = think_buf:sub(e + 8)
 					in_think = false
 				else
-					-- 还在 think 块里，全部丢弃等结束标记
 					think_buf = ""
 					break
 				end
 			else
 				local s = think_buf:find("<think>", 1, true)
 				if s then
-					-- <think> 之前的内容是正常翻译，输出
 					local before = think_buf:sub(1, s - 1)
 					if before ~= "" then
 						on_chunk(before)
@@ -138,8 +184,6 @@ function M.ollama_stream(text, on_chunk, on_done)
 					think_buf = think_buf:sub(s + 7)
 					in_think = true
 				else
-					-- 没有 <think>，但末尾可能是 "<think>" 的残缺前缀
-					-- "<think>" 最长 7 字节，保守保留末尾 7 字节
 					local guard = 7
 					if #think_buf > guard then
 						on_chunk(think_buf:sub(1, #think_buf - guard))
@@ -151,46 +195,108 @@ function M.ollama_stream(text, on_chunk, on_done)
 		end
 	end
 
-	-- 不使用 text=true，完全按原始字节接收，自己处理 UTF-8
-	vim.system({ cfg.ollama_cmd, "run", cfg.ollama_model, prompt }, {
-		stdout = function(err, chunk)
-			if err or not chunk or chunk == "" then
-				return
+	local function flush_and_done(err_msg)
+		if raw_buf ~= "" then
+			filter_and_emit(raw_buf)
+			raw_buf = ""
+		end
+		if think_buf ~= "" and not in_think then
+			on_chunk(think_buf)
+			think_buf = ""
+		end
+		on_done(err_msg)
+	end
+
+	if use_http() then
+		-- HTTP 流式：每行是一个 JSON 对象 {"response":"...","done":false}
+		local body = vim.json.encode({
+			model = cfg.ollama_model,
+			prompt = make_prompt(text),
+			stream = true,
+		})
+
+		vim.system(
+			{
+				"curl",
+				"-s",
+				"--no-buffer",
+				"--max-time",
+				"120",
+				"-X",
+				"POST",
+				get_url("/api/generate"),
+				"-H",
+				"Content-Type: application/json",
+				"-d",
+				body,
+			},
+			{
+				stdout = function(err, chunk)
+					if err or not chunk or chunk == "" then
+						return
+					end
+
+					raw_buf = raw_buf .. chunk
+					local safe_pos = utf8_safe_end(raw_buf)
+					if safe_pos <= 0 then
+						return
+					end
+
+					local safe_text = raw_buf:sub(1, safe_pos)
+					raw_buf = raw_buf:sub(safe_pos + 1)
+
+					-- 按行解析 JSON，每行格式: {"model":...,"response":"字","done":false}
+					for line in safe_text:gmatch("[^\n]+") do
+						line = line:gsub("^%s+", ""):gsub("%s+$", "")
+						if line ~= "" then
+							local ok, data = pcall(vim.json.decode, line)
+							if ok and data and data.response then
+								vim.schedule(function()
+									filter_and_emit(data.response)
+								end)
+							end
+						end
+					end
+				end,
+			},
+			function(obj)
+				vim.schedule(function()
+					if obj.code ~= 0 then
+						flush_and_done("curl 错误: " .. (obj.stderr or "未知错误"))
+					else
+						flush_and_done(nil)
+					end
+				end)
 			end
-
-			-- 字节层：把新 chunk 追加到 raw_buf，找安全截断点
-			raw_buf = raw_buf .. chunk
-			local safe_pos = utf8_safe_end(raw_buf)
-
-			if safe_pos > 0 then
+		)
+	else
+		-- 本地命令流式（原逻辑不变）
+		vim.system({ cfg.ollama_cmd, "run", cfg.ollama_model, make_prompt(text) }, {
+			stdout = function(err, chunk)
+				if err or not chunk or chunk == "" then
+					return
+				end
+				raw_buf = raw_buf .. chunk
+				local safe_pos = utf8_safe_end(raw_buf)
+				if safe_pos <= 0 then
+					return
+				end
 				local safe_text = raw_buf:sub(1, safe_pos)
 				raw_buf = raw_buf:sub(safe_pos + 1)
 				vim.schedule(function()
 					filter_and_emit(safe_text)
 				end)
-			end
-			-- safe_pos == 0 说明整个 raw_buf 都是残缺字节，等下一个 chunk
-		end,
-	}, function(obj)
-		vim.schedule(function()
-			-- flush raw_buf（结束时强制输出剩余内容）
-			if raw_buf ~= "" then
-				filter_and_emit(raw_buf)
-				raw_buf = ""
-			end
-			-- flush think_buf（结束时输出不在 think 块里的剩余内容）
-			if think_buf ~= "" and not in_think then
-				on_chunk(think_buf)
-				think_buf = ""
-			end
-
-			if obj.code ~= 0 then
-				on_done("Ollama 错误: " .. (obj.stderr or "未知错误"))
-			else
-				on_done(nil)
-			end
+			end,
+		}, function(obj)
+			vim.schedule(function()
+				if obj.code ~= 0 then
+					flush_and_done("Ollama 错误: " .. (obj.stderr or "未知错误"))
+				else
+					flush_and_done(nil)
+				end
+			end)
 		end)
-	end)
+	end
 end
 
 return M
